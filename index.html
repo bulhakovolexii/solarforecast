@@ -2,93 +2,162 @@
 <html lang="uk">
   <head>
     <meta charset="UTF-8" />
-    <title>Прогноз сонячної генерації</title>
+    <title>Сонячний Прогноз ☀️</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
       body {
-        font-family: sans-serif;
+        font-family: -apple-system, sans-serif;
         max-width: 900px;
         margin: 20px auto;
+        padding: 0 20px;
         text-align: center;
+        background: #f4f7f6;
+      }
+      .container {
+        background: white;
+        padding: 20px;
+        border-radius: 12px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      }
+      #status {
+        margin: 10px 0;
+        color: #666;
+        font-size: 0.9em;
+      }
+      .error {
+        color: #d32f2f;
+        background: #ffebee;
+        padding: 15px;
+        border-radius: 8px;
+        margin: 10px 0;
+        border: 1px solid #ffcdd2;
       }
       canvas {
-        max-height: 500px;
+        width: 100% !important;
+        height: auto !important;
+        margin-top: 20px;
       }
     </style>
   </head>
   <body>
-    <h2>Прогноз генерації (Схід + Захід)</h2>
-    <canvas id="solarChart"></canvas>
+    <div class="container">
+      <h2>Прогноз генерації (Схід + Захід)</h2>
+      <div id="status">Ініціалізація...</div>
+      <div id="error-container"></div>
+      <canvas id="solarChart"></canvas>
+    </div>
 
     <script>
-      // --- НАЛАШТУВАННЯ ---
-      const lat = "49.41"; // Ваша широта (наприклад, Київ)
-      const lon = "36.2"; // Ваша довгота
-      const dec = "35"; // Нахил
-      const kwp = "4.8"; // Потужність стрінга (кВт)
+      const CONFIG = {
+        lat: "49.41",
+        lon: "36.2",
+        dec: "35",
+        kwp: "4.8",
+        cacheKey: "solar_forecast_cache",
+        cacheTTL: 60 * 60 * 1000, // 1 година
+      };
+
+      const statusEl = document.getElementById("status");
+      const errorEl = document.getElementById("error-container");
+
+      async function init() {
+        const cached = localStorage.getItem(CONFIG.cacheKey);
+        if (cached) {
+          const data = JSON.parse(cached);
+          const age = Date.now() - data.timestamp;
+          if (age < CONFIG.cacheTTL) {
+            statusEl.innerText = `Дані з кешу (оновлено ${Math.round(age / 60000)} хв. тому)`;
+            renderChart(data.east, data.west);
+            return;
+          }
+        }
+        await fetchData();
+      }
 
       async function fetchData() {
-        const lat = "49.41";
-        const lon = "36.2";
-        const dec = "35";
-        const kwp = "4.8";
-
-        const urlEast = `https://api.forecast.solar/estimate/${lat}/${lon}/${dec}/-90/${kwp}`;
-        const urlWest = `https://api.forecast.solar/estimate/${lat}/${lon}/${dec}/90/${kwp}`;
-
         try {
-          console.log("Завантаження Східного стрінга...");
-          const resEast = await fetch(urlEast).then((r) => r.json());
-          if (resEast.message) throw new Error(resEast.message.text);
+          statusEl.innerText = "Запитуємо дані для Сходу...";
+          const resEast = await callAPI(-90);
 
-          // Робимо паузу 2 секунди, щоб API нас не забанило
-          await new Promise((resolve) => setTimeout(resolve, 2000));
+          statusEl.innerText = "Чекаємо 5 секунд (пауза для API)...";
+          await new Promise((r) => setTimeout(r, 5000));
 
-          console.log("Завантаження Західного стрінга...");
-          const resWest = await fetch(urlWest).then((r) => r.json());
-          if (resWest.message) throw new Error(resWest.message.text);
+          statusEl.innerText = "Запитуємо дані для Заходу...";
+          const resWest = await callAPI(90);
 
-          renderChart(resEast.result.watts, resWest.result.watts);
+          const cacheData = {
+            timestamp: Date.now(),
+            east: resEast.result.watts,
+            west: resWest.result.watts,
+          };
+          localStorage.setItem(CONFIG.cacheKey, JSON.stringify(cacheData));
+
+          statusEl.innerText = "Дані оновлено!";
+          renderChart(cacheData.east, cacheData.west);
         } catch (e) {
-          document.body.innerHTML += `<p style="color:red">Помилка: ${e.message}<br>Спробуйте оновити сторінку через 15 хвилин.</p>`;
+          statusEl.innerText = "Помилка.";
+          errorEl.innerHTML = `<div class="error"><b>Помилка:</b> ${e.message}<br><small>API заблокувало запит через ліміти. Спробуйте через 30-60 хвилин або з іншого IP (мобільний інтернет).</small></div>`;
         }
       }
 
+      async function callAPI(azimuth) {
+        const url = `https://api.forecast.solar/estimate/${CONFIG.lat}/${CONFIG.lon}/${CONFIG.dec}/${azimuth}/${CONFIG.kwp}`;
+        const response = await fetch(url);
+
+        if (response.status === 429)
+          throw new Error("Забагато запитів (Rate Limit)");
+        if (!response.ok) throw new Error(`Помилка API: ${response.status}`);
+
+        const data = await response.json();
+        if (data.message && data.message.type === "error")
+          throw new Error(data.message.text);
+
+        return data;
+      }
+
       function renderChart(eastData, westData) {
-        const labels = Object.keys(eastData).slice(0, 24); // Беремо перші 24 точки (сьогодні)
-        const eastWatts = labels.map((t) => eastData[t]);
-        const westWatts = labels.map((t) => westData[t]);
-        const totalWatts = labels.map(
-          (t, i) => eastWatts[i] + (westWatts[i] || 0),
-        );
+        // Об'єднуємо всі унікальні часові мітки
+        const allKeys = Array.from(
+          new Set([...Object.keys(eastData), ...Object.keys(westData)]),
+        ).sort();
+        const labels = allKeys.slice(0, 24); // Обмежуємо для наочності (сьогодні)
+
+        const eastWatts = labels.map((t) => eastData[t] || 0);
+        const westWatts = labels.map((t) => westData[t] || 0);
+        const totalWatts = eastWatts.map((v, i) => v + westWatts[i]);
 
         new Chart(document.getElementById("solarChart"), {
           type: "line",
           data: {
-            labels: labels.map((l) => l.split(" ")[1].substring(0, 5)), // Тільки час
+            labels: labels.map((l) => l.split(" ")[1].substring(0, 5)),
             datasets: [
               {
-                label: "Схід (4.8кВт)",
+                label: "Схід",
                 data: eastWatts,
                 borderColor: "#ffce56",
+                tension: 0.3,
                 fill: false,
               },
               {
-                label: "Захід (4.8кВт)",
+                label: "Захід",
                 data: westWatts,
                 borderColor: "#36a2eb",
+                tension: 0.3,
                 fill: false,
               },
               {
                 label: "Разом",
                 data: totalWatts,
                 backgroundColor: "rgba(75, 192, 192, 0.2)",
-                fill: true,
                 borderColor: "#4bc0c0",
+                fill: true,
+                borderDash: [5, 5],
               },
             ],
           },
           options: {
+            responsive: true,
+            plugins: { legend: { position: "bottom" } },
             scales: {
               y: {
                 beginAtZero: true,
@@ -99,7 +168,7 @@
         });
       }
 
-      fetchData();
+      init();
     </script>
   </body>
 </html>

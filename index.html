@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="uk">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Прогноз сонячної генерації</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+      body {
+        font-family: sans-serif;
+        max-width: 900px;
+        margin: 20px auto;
+        text-align: center;
+      }
+      canvas {
+        max-height: 500px;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>Прогноз генерації (Схід + Захід)</h2>
+    <canvas id="solarChart"></canvas>
+
+    <script>
+      // --- НАЛАШТУВАННЯ ---
+      const lat = "49.41"; // Ваша широта (наприклад, Київ)
+      const lon = "36.2"; // Ваша довгота
+      const dec = "35"; // Нахил
+      const kwp = "4.8"; // Потужність стрінга (кВт)
+
+      async function fetchData() {
+        const lat = "49.41";
+        const lon = "36.2";
+        const dec = "35";
+        const kwp = "4.8";
+
+        const urlEast = `https://api.forecast.solar/estimate/${lat}/${lon}/${dec}/-90/${kwp}`;
+        const urlWest = `https://api.forecast.solar/estimate/${lat}/${lon}/${dec}/90/${kwp}`;
+
+        try {
+          console.log("Завантаження Східного стрінга...");
+          const resEast = await fetch(urlEast).then((r) => r.json());
+          if (resEast.message) throw new Error(resEast.message.text);
+
+          // Робимо паузу 2 секунди, щоб API нас не забанило
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+
+          console.log("Завантаження Західного стрінга...");
+          const resWest = await fetch(urlWest).then((r) => r.json());
+          if (resWest.message) throw new Error(resWest.message.text);
+
+          renderChart(resEast.result.watts, resWest.result.watts);
+        } catch (e) {
+          document.body.innerHTML += `<p style="color:red">Помилка: ${e.message}<br>Спробуйте оновити сторінку через 15 хвилин.</p>`;
+        }
+      }
+
+      function renderChart(eastData, westData) {
+        const labels = Object.keys(eastData).slice(0, 24); // Беремо перші 24 точки (сьогодні)
+        const eastWatts = labels.map((t) => eastData[t]);
+        const westWatts = labels.map((t) => westData[t]);
+        const totalWatts = labels.map(
+          (t, i) => eastWatts[i] + (westWatts[i] || 0),
+        );
+
+        new Chart(document.getElementById("solarChart"), {
+          type: "line",
+          data: {
+            labels: labels.map((l) => l.split(" ")[1].substring(0, 5)), // Тільки час
+            datasets: [
+              {
+                label: "Схід (4.8кВт)",
+                data: eastWatts,
+                borderColor: "#ffce56",
+                fill: false,
+              },
+              {
+                label: "Захід (4.8кВт)",
+                data: westWatts,
+                borderColor: "#36a2eb",
+                fill: false,
+              },
+              {
+                label: "Разом",
+                data: totalWatts,
+                backgroundColor: "rgba(75, 192, 192, 0.2)",
+                fill: true,
+                borderColor: "#4bc0c0",
+              },
+            ],
+          },
+          options: {
+            scales: {
+              y: {
+                beginAtZero: true,
+                title: { display: true, text: "Ватт (W)" },
+              },
+            },
+          },
+        });
+      }
+
+      fetchData();
+    </script>
+  </body>
+</html>
